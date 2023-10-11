@@ -21,4 +21,4 @@ jobs:
           context: .
           push: true
           tags: |
-            AU-ENVS-Bioinformatics/cmg-biotools:latest
+            au-envs-bioinformatics/cmg-biotools:latest
