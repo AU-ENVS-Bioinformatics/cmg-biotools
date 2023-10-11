@@ -2,6 +2,15 @@ This repository contains a docker image to use CMG-Biotools.
 
 https://services.healthtech.dtu.dk/services/CMG-biotools/CMGbiotools-2.0/Exercises-CMGbiotools-2.0.pdf
 
+## How to use in huginn
+
+Inside huginn, you can just run the following command:
+
+```bash
+conda activate snakemake
+singularity shell /software/singularities/cmg_biotools.sif
+```
+
 ## How to use
 
 First, pull the image (more information in https://github.com/AU-ENVS-Bioinformatics/cmg-biotools/pkgs/container/cmg-biotools)
