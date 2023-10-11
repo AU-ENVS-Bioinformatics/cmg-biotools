@@ -27,4 +27,4 @@ jobs:
           context: .
           push: true
           tags: |
-            au-envs-bioinformatics/cmg-biotools:latest
+            ghcr.io/au-envs-bioinformatics/cmg-biotools:latest
