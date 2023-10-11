@@ -18,6 +18,9 @@ RUN cpanm PostScript::Simple && \
   cpanm Getopt::Long && \
   cpanm Bio::SearchIO::blastxml
 
+RUN cp -r /usr/biotools/system/PERL/Parallel/ /etc/perl/
+# Install blast, HMMER and prodigal
+RUN apt install -y ncbi-blast+ hmmer prodigal
 # Run bash in home directory
 WORKDIR /root
 CMD ["/bin/bash"]
