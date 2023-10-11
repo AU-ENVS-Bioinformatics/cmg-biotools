@@ -1,0 +1,76 @@
+#!/bin/bash
+# Authors: Tammi Camilla Vesth (tammi@cbs.dtu.dk)
+# For license see /usr/biotools/CMG-biotools.license
+#
+# 	Script for running tools for basic genome sequence analysis
+#
+#	Is it possible to make certain Perl modules part of this bundle?
+#
+#	Inspired by the students work in course 27104
+#	I find it relevant to start any geneome analysis with a set of basic calculations 
+#
+#	1.	=====	AT/GC content (DNA) ===== percentage
+#	2.	=====	TO BE DONE : Sequence quality (DNA) ===== score
+#	3.A	=====	Codon usage (orf/protein) ===== plot
+#	3.B	=====	Amino acid usage (orf/protein) ===== plot
+#	3.C	=====	Position specific nucleotide bias ===== plot (maybe score?)
+#
+#	Requirements : BioPerl, GnuPlot, PostScript::Simple.pm
+#
+#	Script should be run in same folder as input data is found
+#
+
+#===== Test if arguments are correct =====
+
+if [ $# != 2 ]
+then
+	echo "Wrong number of arguments."
+	echo "Usage:	./BasicGenomeAnalysis organismName GnuPlotPath"
+	exit
+fi
+
+if [ ! -f $1 ]; then
+	echo "File:	$1 not found, make sure file is called *.orf.fna!"
+	echo "Usage:	./BasicGenomeAnalysis organismName GnuPlotPath"
+	exit
+fi
+
+if [ ! -f $2 ]; then
+	echo "Directory:	$2 does not exist."
+	echo "Usage:	./BasicGenomeAnalysis organismName GnuPlotPath"
+	exit
+fi 
+
+#===== Generating raw data =====
+perl /usr/biotools/indirect/atStats.pl $1 > $1.atStats.tab
+cat $1.atStats.tab > $1.CodonAaUsage
+perl /usr/biotools/indirect/CodonAaUsage.pl $1 >> $1.CodonAaUsage
+perl /usr/biotools/indirect/basicInfoPS.pl $1.atStats.tab $1 $1.CodonAaUsage > $1.basicInfoPS.ps
+
+wait
+
+#===== Plotting data =====
+grep codon $1.CodonAaUsage | perl /usr/biotools/indirect/roseplot.pl -axistitle "Percentage" -Ycol 3 -Xcol 2 -fcolor red -steps 4 -T "Codon Usage" -ST $1 -output $1.codon-usage.ps
+echo "#===== Roseplot of Codon Usage finished/attempted"
+
+grep aa $1.CodonAaUsage | perl /usr/biotools/indirect/roseplot.pl -axistitle "Percentage" -Ycol 3 -Xcol 2 -fcolor blue -steps 1 -T "Amino acid usage" -ST $1 -output $1.aa-usage.ps
+echo "#===== Roseplot of Amino acid usage finished/attempted"
+
+sed s/test/$1/g /usr/biotools/indirect/freqPlot.plt | $2
+echo "#===== Bias in third position plot, Gnuplot"
+
+#===== Making pdf from ps =====
+ps2pdf $1.codon-usage.ps
+ps2pdf $1.aa-usage.ps
+ps2pdf $1.bias.ps
+ps2pdf $1.basicInfoPS.ps
+echo "#===== Made pdf from ps files"
+
+#===== Printing three plots on one page =====
+gs -q -dNOPAUSE -dBATCH -sDEVICE=pdfwrite -sOutputFile=$1.merged.pdf $1.basicInfoPS.pdf $1.bias.pdf $1.codon-usage.pdf $1.aa-usage.pdf  
+pdf2ps $1.merged.pdf
+psnup -4 -b-0.25in -m1in $1.merged.ps $1.all.ps
+ps2pdf $1.all.ps 
+
+rm $1*merged* $1*codon-usage.ps* $1*aa-usage.ps* $1*bias.ps* $1*basicInfoPS.ps* $1*all.ps $1*atStats.tab*
+#$1.CodonAaUsage  

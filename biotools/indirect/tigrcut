@@ -1,0 +1,29 @@
+#!/usr/bin/perl
+# Authors: Peter Fisher Hallin
+# For license see /usr/biotools/CMG-biotools.license
+
+# accepts a blastreport in XML and parses only those hits, that
+# conforms to the 50 / 50 criteria:
+# Alignment constitutes at least 50% of the longest gene
+# and the alignment should have 50% conserved residues.
+
+if ( $ARGV[0] eq "CHILD" ) {
+	while (<STDIN>) {
+		chomp;
+		next if /^#/;
+		@F = split(/\t/,$_);
+		next if $F[2]/$F[3] < 0.5;
+		next if $F[4] < 0.5;
+		print join("\t",@F),"\n";
+	}
+} else { 
+	my $alrmethod = "";
+	if ($ARGV[0] ne "") {
+		$alrmethod = "-alrmethod $ARGV[0]";
+	}
+	open PARSE , "| perl /usr/biotools/indirect/xml-parse $alrmethod 'BlastOutput_query-def,Hit_def,Hsp_identity,Hsp_align-len,ALR,Hsp_evalue,Hsp_score' | perl /usr/biotools/indirect/tigrcut CHILD";
+	while (<>) {
+		print PARSE $_;
+	}
+	close PARSE;
+}

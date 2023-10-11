@@ -1,0 +1,178 @@
+#!/usr/bin/perl -w
+# Authors: Tammi Camilla Vesth (tammi@cbs.dtu.dk)
+# For license see /usr/biotools/CMG-biotools.license
+
+#===============================================================
+#  This code will calculate the AT content of a genome from a DNA fasta file with one or more entries.
+#  It can be used on multiple files and then the results will be put in one file
+#  The information can then be visualized in a histogrem as follows:
+#  histo -c 5 output.file.tab
+#  Plotting the AT content standard deviation:
+#  histo -c 3 output.file.tab
+#===============================================================
+
+#ls -1 `pwd`/CodonUsage/Data/*orfs.fsa > test.list
+use strict;
+use Bio::SeqIO;
+use Bio::Tools::SeqStats;
+#use Statistics::Descriptive;
+use Getopt::Long;
+my $format = 'fasta';
+my $file;
+my $list;
+my $help =0;
+GetOptions('h|help|?' => \$help);
+
+# Read in files from commandline
+my @files = @ARGV;
+
+my $USAGE = "# USAGE: genomeStatistics [path to file(s)]\nFile format should be fasta\n";
+# interaction[tammi]:~/projects/1500GenomesPoster>perl Scripts/1500_atPercent.pl Fasta/*fsa
+
+if( $help or (scalar @files) < 1) { die $USAGE; }
+
+# Perform actions on each file
+foreach my $file (@files){
+	chomp $file;
+	
+	# Define variables
+	my @values_array_gc = ();
+	my @values_array_at = ();
+	my ($total_base, $total_gc, $total_at, $total_unknown) = (0,0,0,0);
+	my ($contig_count, $unknown) = (0,0);
+	my $hash_ref;
+	my $largest_seq = 0;
+	my ($x, $i, $count_stretch) = (0,0,0);
+	my ($seqin, $seq, $seq_stats, $base, $test_stretch, @seqLengths);
+	my ($N25, $N50, $N75);
+	my ($N25count, $N50count, $N75count) = (0,0,0);
+	
+
+	# If file empty, take next file
+	$file = shift unless $file;
+	if( defined $file ) {
+		print "# Could not open file [$file]\n$USAGE" and exit unless -e $file;
+		$seqin = new Bio::SeqIO(-format => $format, -file   => $file);
+	} 
+	else {
+		print "$USAGE";
+		exit;
+	}
+
+	while( $seq = $seqin->next_seq ) {
+		next if( $seq->length == 0 );
+		if( $seq->alphabet eq 'protein' ) {
+			warn("# $file : program does not work on amino acid sequences ...skipping this seq");
+			exit;
+		}
+	
+		$seq_stats = Bio::Tools::SeqStats->new('-seq'=>$seq);
+		
+		$hash_ref = $seq_stats->count_monomers(); # for DNA sequence
+		
+		$total_base += $seq->length;
+		$total_gc += $hash_ref->{'G'} + $hash_ref->{'C'};
+		$total_at += $hash_ref->{'A'} + $hash_ref->{'T'};
+		push(@values_array_gc, ($hash_ref->{'G'} + $hash_ref->{'C'}) / $seq->length());
+		push(@values_array_at, ($hash_ref->{'A'} + $hash_ref->{'T'}) / $seq->length());
+		push (@seqLengths, $seq->length); # record length for N50 calc's
+
+		# Each run of this loop corresponds to a contig
+		$contig_count ++;
+		
+		# Count number of "bases" that are not A, C, T or G
+		for $base (keys %$hash_ref){
+			if ($base ne 'A' and $base ne 'T' and $base ne 'C' and $base ne 'G'){
+				$unknown += $hash_ref->{$base};
+				#print "$base\t$hash_ref->{$base}\n";
+			}
+		}
+		
+		# Evaluate size of sequence, if largest, update the largest length number
+		$largest_seq = $seq->length if ($seq->length > $largest_seq);
+	}
+
+	# Calculate N25, N50, and N75 and counts
+	my $frac_covered = $total_base;
+	@seqLengths = reverse sort { $a <=> $b } @seqLengths;
+	$N25 = $seqLengths[0];
+	while ($frac_covered > $total_base*3/4) {
+		$N25 = shift(@seqLengths);
+		$N25count++; $N50count++; $N75count++;
+		$frac_covered -= $N25;
+	}
+	$N50 = $N25;
+	while ($frac_covered > $total_base/2) {
+		$N50 = shift(@seqLengths);
+		$N50count++; $N75count++;
+		$frac_covered -= $N50;
+	}
+	$N75 = $N50;
+	while ($frac_covered > $total_base/4) {
+		$N75 = shift(@seqLengths);
+		$N75count++;
+		$frac_covered -= $N75;
+	}
+
+
+	# Print output	
+	if ($total_base > 0){
+		print "Filename\tTotalBases:\tPer.AT:\tStDevAT:\tContigCount:\tPer.Unknowns:\tPer.LargestSeq\tN25\tN50\tN75\n";
+		
+		printf "$file\t%d\t%.2f\t%.4f\t%.d\t%.4f\t%.3f\t%d\t%d\t%d\n", 
+		$total_base,
+		($total_at / $total_base)*100,
+		standard_deviation(@values_array_at), 
+		$contig_count, 
+		($unknown / $total_base)*100, 
+		($largest_seq / $total_base)*100,
+		$N25,$N50,$N75;
+	}
+	else { print "# total_base is less than or equal to 0\n";}
+}
+
+#	Make active to print more infor for genome
+=put
+print "St.dev GC :\t", standard_deviation(@values_array_gc)."\n";
+print "St.dev AT :\t", standard_deviation(@values_array_at)."\n";
+printf "Total GC :\t%.4f out of %d bases\n", $total_gc / $total_base;
+printf "Total AT :\t%.4f out of %d bases\n", $total_at / $total_base;
+printf "Total bases :\t%d\n", $total_base;
+=cut
+
+sub standard_deviation {
+	my(@numbers) = @_;
+	#Prevent division by 0 error in case you get junk data
+	return undef unless(scalar(@numbers));
+	
+	# Step 1, find the mean of the numbers
+	my $total1 = 0;
+	foreach my $num (@numbers) {
+		$total1 += $num;
+	}
+	my $mean1 = $total1 / (scalar @numbers);
+	
+	# Step 2, find the mean of the squares of the differences
+	# between each number and the mean
+	my $total2 = 0;
+	foreach my $num (@numbers) {
+		$total2 += ($mean1-$num)**2;
+	}
+	my $mean2 = $total2 / (scalar @numbers);
+	
+	# Step 3, standard deviation is the square root of the
+	# above mean
+	my $std_dev = sqrt($mean2);
+	return $std_dev;
+}
+
+
+	# Make active to print numbers for each sequence
+=put	
+	print $seq->display_id , "\t";
+	printf "GC %.5f\t", ($hash_ref->{'G'} + $hash_ref->{'C'}) /$seq->length();
+	printf "AT %.5f\t", ($hash_ref->{'A'} + $hash_ref->{'T'}) /$seq->length();
+	printf "%.5f\t", (($hash_ref->{'G'} + $hash_ref->{'C'}) /$seq->length()) + (($hash_ref->{'A'} + $hash_ref->{'T'}) /$seq->length());
+	print "\n";
+=cut 	
+

@@ -1,0 +1,406 @@
+#!/usr/bin/perl
+use strict;
+use Parallel::ChildManager;
+use Digest::MD5;
+use Getopt::Long;
+
+my $scratch = "/tmp/pancoregenome.$$";
+my $FORMATDB = '/usr/biotools/blast/bin/formatdb';
+my $TIGRCUT = "/usr/biotools/indirect/tigrcut"; # puts 50% ALR and 50% cutoff identity on an XML output of blastall
+my $BLASTALL = "/usr/biotools/blast/bin/blastall";
+my $cache_source = "blastp-core+matrix";
+
+
+my ($keep,$cpu,$clean,$cex);
+&GetOptions (
+# main options
+ "keep:s"   , \$keep,       # keep temporary files in this dir ( TRY AND CREATED UNLESS EXIST )
+ "cpu:s"   ,  \$cpu,        # number of CPUs - 5 is default
+ "clean"  =>  \$clean ,      # wipe all existing results for this run
+ "cex:s"     =>  \$cex  ,     # label scaling
+);
+
+$cex = 0.7 unless defined $cex;
+$cpu = 1 unless defined $cpu;
+
+mkdir $scratch unless -d $scratch;
+
+# create config reading from stdin
+my @config = parse_config ();
+
+@config = prepare_fasta(@config);
+
+# make blast databases
+&make_blastdbs(@config);
+
+# make blast reports
+my $cm = new ChildManager($cpu);
+make_blastreports(@config);
+
+&group(@config);
+
+@config = core_genome ( @config ) ;
+@config = pan_genome ( @config ) ;
+@config = new_genes ( @config ) ;
+@config = new_families ( @config ) ;
+
+make_table ( @config ) ;
+
+plot(@config);
+
+if ( defined ( $keep ) ) {
+	system "mv $keep $keep.old_from_$$" if -e "$keep.old_from_$$";
+	system "mv $scratch $keep";
+	print STDERR "# kept temporary files in $keep\n";
+}
+
+cleanup ();
+
+sub cleanup {
+	system "rm -rf $scratch";
+}
+
+sub make_blastreports {
+	my @config = @_;
+	my %tab_h;
+	foreach my $a ( 0 .. $#config ) {
+		foreach my $b ( 0 .. $#config ) {
+			$tab_h{"$a-$b"} = $cm->start();
+			unless ( $tab_h{"$a-$b"} ) {
+				my $blastreport_scratch = "$scratch/$a-$b.blastout.gz";
+				print STDERR "# make blast report $blastreport_scratch\n";
+				my $jobid = md5 ( "$scratch/$a.fsa" , "$scratch/$b.fsa" ) ;
+				system "/usr/biotools/indirect/cacher --id='$jobid' --source='$cache_source' -action get > $blastreport_scratch";
+				if ( $? != 0 or $clean ) {
+					print STDERR "# jobid $jobid not in cache - redoing\n";
+					system "$BLASTALL -F 0 -i $scratch/$a.fsa -p blastp -e 1e-5 -m 7 -d $scratch/$b.fsa | perl $TIGRCUT | gawk '{print \$1\"\\t\"\$2}' | gzip > $blastreport_scratch";
+					system "/usr/biotools/indirect/cacher --id='$jobid' --source='$cache_source' -action put -expire 100 < $blastreport_scratch";
+				} else {
+					print STDERR "# fetched jobid $jobid from cache\n";
+				}
+				my $waiting = ($#config+1)**2;
+				foreach my $a ( 0 .. $#config ) {
+					foreach my $b ( 0 .. $#config ) {
+						$waiting-- if -e "$scratch/$a-$b.blastout.gz";
+					}
+				}
+				print STDERR "# jobid $jobid finished - $waiting left\n";
+				exit;
+			}
+		}
+	}
+	$cm->wait_all_children; 
+}
+
+sub make_blastdbs {
+	my @config = @_;
+	foreach my $id ( 0 .. $#config ) {
+		my $target = $config[$id]->{target};
+		print STDERR "# building blast database '$target.psq'\n";
+		system "$FORMATDB -i $target -p T -t $id";
+	}
+}
+
+sub prepare_fasta {
+	my @config = @_;
+	foreach my $id ( 0 .. $#config ) {
+		my ($nprot,$skipped,$checksum) = fasta2fasta( $config[$id]->{source} , "$scratch/$id.fsa");
+		warn "# prepare_fasta(): nprot=$nprot, skipped=$skipped\n";
+		$config[$id]->{target} = "$scratch/$id.fsa";
+		$config[$id]->{'total genes'} = $nprot;
+		$config[$id]->{skipped} = $skipped;
+		$config[$id]->{checksum} = $checksum;
+		die "nprot == 0 for $config[$id]->{source}\n" if $nprot == 0;
+	}
+	return @config;
+}
+
+sub fasta2fasta {
+	my ($input,$output) = @_;
+	my $temp = "$output.temp.raw";
+	my $nprot = 0;
+	my $skipped = 0;
+	open RAW , "| saco_convert -I fasta -O raw | sort > $temp" or die $!;
+	open FASTA , $input;
+	while (<FASTA>) {
+		print RAW;
+	}	
+	close FASTA;
+	close RAW;
+	my $checksum = md5 ( $temp ) ;
+	open FASTA , "| saco_convert -I tab -O fasta > $output";
+	open TAB , $temp or die $!;
+	while (<TAB>) {
+		if ( ! /^([A-Za-z]+)/ ) {
+			$skipped++;
+			next;
+		}
+		$nprot++;
+		print FASTA "$checksum.$nprot\t$1\n";
+	}
+	close FASTA;
+	close TAB;
+	unlink $temp;
+	return ($nprot,$skipped,$checksum);
+}
+
+sub md5 {
+	my @files = @_;
+	my $md5 = Digest::MD5->new;
+	foreach my $file (@files) {
+		open(FILE, $file) or die "Can't open '$file': $!";
+		binmode(FILE);
+		while (<FILE>) {
+			$md5->add($_);
+		}
+		close(FILE);
+	}
+	return $md5->hexdigest;
+}
+
+sub parse_config {
+	my @config;
+
+	while ( <> ) {
+		next if /^#/;
+		chomp;
+		my ($description,$source) = split /\t/;
+		warn "# description=$description, source=$source\n";
+		my $id = $#config + 1;
+		( $config[$id]->{description} , $config[$id]->{source} , $config[$id]->{id} ) = ( $description , $source , $id );
+	}
+
+	return @config;
+}
+
+sub group {
+	my @config = @_;
+	foreach my $id (0 .. $#config) {
+		open GRP , "| perl /usr/biotools/indirect/group > $scratch/group_$id.dat";
+		foreach my $x (0 .. $id) {
+			foreach my $y (0 .. $id) {
+				foreach my $z ($x , $y) {
+					foreach my $n ( 1 .. $config[$z]->{'total genes'} ) {
+						print GRP $config[$z]->{checksum}.".$n\n";
+					}
+				}
+				open BLASTOUT , "gunzip -c $scratch/$x-$y.blastout.gz |";
+				while (<BLASTOUT>) {
+					print GRP $_;
+				}
+				close BLASTOUT;
+			}
+		}
+		close GRP;
+	}
+}
+
+sub pan_genome {
+	my @config = @_;
+	foreach my $id (0 .. $#config) {
+		$config[$id]->{'pan genome'} = 0;
+		open GRP , "$scratch/group_$id.dat";
+		while (<GRP>) {
+			$config[$id]->{'pan genome'}++;
+		}
+		close GRP;
+	}
+	return @config;
+}
+
+sub core_genome {
+	my @config = @_;
+	foreach my $id (0 .. $#config) {
+		$config[$id]->{'core genome'} = 0;
+		open GRP , "$scratch/group_$id.dat";
+		while (<GRP>) {
+			my ($group_id,$count,@members) = split /\t/;
+			my %repr;
+			foreach (@members) {
+				next unless /^(.*)\.(.*)/;
+				$repr{$1} = 1;
+			}
+			$config[$id]->{'core genome'}++ if scalar ( keys %repr ) == $id + 1;
+		}
+		close GRP;
+	}
+	return @config;
+}
+
+sub new_genes {
+	my @config = @_;
+foreach my $a ( 0 .. $#config ) {
+		my %HITS;
+		$config[$a]->{'new genes'} = 0;
+		print STDERR "# parsing blast reports (id $a)\n";
+		foreach my $b ( 0 .. $a ) {
+			open GUNZIP , "gunzip -c $scratch/$a-$b.blastout.gz $scratch/$b-$a.blastout.gz |";
+			while (<GUNZIP>) {
+				chomp;
+				my ($q,$s) = split /\t/;
+				$HITS{$q}{$s} = 1;
+			}
+			close GUNZIP;
+		}
+		open FSA , "$scratch/$a.fsa" or die $!;
+		while (<FSA>) {
+			chomp;
+			next unless /^>(.*)/;
+			my $q = $1;
+			my $hits_in_other_samples;
+			foreach (keys %{$HITS{$q}}) {
+				next unless /^(.*)\./; 
+				if ( $config[$a]->{checksum} ne $1) {
+					$hits_in_other_samples = 1;
+					last;
+				}
+			}
+			$config[$a]->{'new genes'}++ if ! defined $hits_in_other_samples;
+		}
+	}
+	return @config;
+}
+
+sub new_families {
+	my @config = @_;
+	foreach my $id (0 .. $#config) {
+		$config[$id]->{'new families'} = 0;
+		open GRP , "$scratch/group_$id.dat";
+		while (<GRP>) {
+			my ($group_id,$count,@members) = split /\t/;
+			my $is_new_family = 1;
+			foreach (@members) {
+				next unless /^(.*)\.(.*)/;
+				$is_new_family = 0 if $1 ne $config[$id]->{checksum};
+			}
+			$config[$id]->{'new families'} += $is_new_family;
+		}
+		close GRP;
+	}
+	return @config;
+}
+
+sub make_table {
+	my @config = @_;
+	foreach my $id (0 .. $#config) {
+		print $config[$id]->{'new families'},"\t";
+		print $config[$id]->{'new genes'},"\t";
+		print $config[$id]->{'core genome'},"\t";
+		print $config[$id]->{'pan genome'},"\n";
+	}
+}
+
+sub plot {
+	my @config = @_;
+	my $tbl = "$scratch/tbl";
+	open TBL , ">$tbl";
+	my @keys = ("id","description","total genes","new genes","new families","pan genome","core genome");
+	print TBL join ("\t",@keys)."\n";
+	foreach my $id ( 0 .. $#config ) {
+		foreach my $key (@keys) {
+			print TBL $config[$id]->{$key},"\t";
+			}
+	print TBL "\n";
+	}
+	close TBL;
+	open R , "| /usr/bin/R --vanilla > /dev/null";
+	print R "
+postscript('$scratch/ps');
+layout( matrix(c(1,2), 1, 2, byrow = TRUE),widths=c(0.5,0.5))
+data <- read.table('$tbl',skip=1,sep='\t',dec='.',header=FALSE);
+tN <- data[,3]
+x<-rbind(data[,4],data[,5])
+r <- barplot(x,beside=TRUE,cex.names=$cex,names.arg=as.vector(data[,1])+1,ylim=c(0,1.3*max(data[,6])))
+lines(r[2,], type='b', data[,7], col='red', lwd=4)
+lines(r[2,], type='b', data[,6], col='blue', lwd=4)
+legend(1,1.3*max(data[,6]),c('New genes','New gene families','Core genome','Pan genome'),col=c('darkgray','lightgray','red','blue'), lwd=c(4,4,4,4))
+plot.new()
+plot.window(xlim=c(0,2),ylim=c(-nrow(data),1))
+for (i in 1:nrow(data)) {
+ text(0,-i*0.6, adj=0,paste(i,': ',data[i,2]),cex=$cex)
+}
+dev.off();
+";
+	close R;
+	system "cat $scratch/ps";
+}
+
+__END__
+
+NAME
+    coregenome - derive core-/pan genome as well as count new genes/families in
+    a list of genomes/samples
+
+
+SYNOPSIS
+    perl pancoreplot [-cpu N] [-clean] list 
+
+DESCRIPTION
+    coregenome reads a list from STDIN, defining the proteomes to be compared.
+    The order of the list indicate in what order the genomes will appear in the
+    plot. Each line must contain a description and data source, separated by
+    tab. Example:
+
+    Campylobacter jejuni subsp. jejuni NCTC 11168	saco_extract -t -I genbank -O fasta /home/projects/pfh/genomes/data/AL111168/AL111168.gbk |
+    Campylobacter jejuni RM1221	saco_extract -t -I genbank -O fasta /home/projects/pfh/genomes/data/CP000025/CP000025.gbk |
+    Campylobacter fetus subsp. fetus 82-40	saco_extract -t -I genbank -O fasta /home/projects/pfh/genomes/data/CP000487/CP000487.gbk |
+    Campylobacter jejuni subsp. jejuni 81-176	saco_extract -t -I genbank -O fasta /home/projects/pfh/genomes/data/CP000538/CP000538.gbk |
+    Campylobacter jejuni subsp. doylei 269.97	saco_extract -t -I genbank -O fasta /home/projects/pfh/genomes/data/CP000768/CP000768.gbk |
+    Campylobacter curvus 525.92	saco_extract -t -I genbank -O fasta /home/projects/pfh/genomes/data/CP000767/CP000767.gbk |
+    Campylobacter hominis ATCC BAA-381	saco_extract -t -I genbank -O fasta /home/projects/pfh/genomes/data/CP000776/CP000776.gbk |
+    Campylobacter concisus 13826	saco_extract -t -I genbank -O fasta /home/projects/pfh/genomes/data/CP000792/CP000792.gbk |
+    Campylobacter jejuni subsp. jejuni 81116	saco_extract -t -I genbank -O fasta /home/projects/pfh/genomes/data/CP000814/CP000814.gbk |
+
+    Note that the above exampe does not specify files as the data source, rather a command to obtain the data (tailing pipe is important)
+
+    Each proteome is blasted against all previous proteoms in the list. All
+    blast results are kept in the directory './cache', and the naming is
+    derived based in MD5 checksums of the raw proteins sequences. Example:
+
+    GenomeA	A.fsa
+    GenomeB	B.fsa
+    GenomeC	C.fsa
+
+		Providing the list as above will cause all proteoms to be BLAST againast all.
+
+    The program will for each proteome X calculate the follwing:
+
+    - Number of proteins observed in X
+    - Number of new genes observed in genome in X compared to 0 .. (X-1) 
+    - Number of new gene families observed in genome in X compared to 0 .. (X-1) 
+    - Size of pan genome at genome X
+    - Size of core genome at genome X
+
+    The program assumes two proteins being similar if the aligment identified by
+    BLASTP (evalue <= 1e-5) spans 50% or more of the longest of the sequence AND
+    that 50% of the residues are conserved within the alignment. Only the reciprocal match
+    is considered.
+
+OPTIONS
+    -clean
+       Ignores existing and cached results and regenerates the blast reports
+
+    -cpu <N>
+       Specify how many BLAST searches run in parallel.
+
+    -table <filename>
+       Specify the filename to which the result table will be written
+ 
+VERSION
+    This version (2.2, November 27, 2008) replaces all older versions of coregenome as older version had known bugs.
+
+EXAMPLE
+    mysql -B -N -e "select genbank,concat('saco_extract -t -I genbank -O fasta \
+      /home/projects/pfh/genomes/data/',genbank,'/',genbank,'.gbk |') from pfh_public.genbank_complete_seq as s , \
+      pfh_public.genbank_complete_prj as p where s.pid = p.pid and p.organism_name like 'campy%' \
+      and genbank not like 'genome%' and segment_name like 'chromo%' order by released" | \
+      perl coregenome-2.2 -cpu 10 > output.ps
+
+
+AUTHOR
+    Peter Fischer Hallin, pfh@cbs.dtu.dk
+
+
+
+
+

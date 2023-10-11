@@ -1,0 +1,66 @@
+#!/usr/bin/perl
+# Authors: Tammi Camilla Vesth (tammi@cbs.dtu.dk)
+# For license see /usr/biotools/CMG-biotools.license
+
+
+=put
+ 
+ Program counts how many stretches of N's are in a DNA sequence and reports the length of each stretch 
+  
+ countUnknowns.pl Megamonas_hypermegale_ART12_1.fna 
+ Total number of bases	2209947
+ Total number of unknown stretches	99
+ Total number of unknowns	79605
+ Percentage of unknowns	3.60212258484027
+ Average length of unknown stretch	804.090909090909
+ Max/min length of unknown stretch	1780	141
+ 
+=cut 
+
+use strict;
+use warnings;
+
+my $file = $ARGV[0];
+my $s;
+my $x = 4;
+my $totN = 0;
+my $countStretch = 0;
+my $avgLength = 0;
+my @lengths;
+my $max = 0;
+my $min =100000;
+
+print "Could not open file [$file]\n" and exit unless -e $file;
+
+open (FILE, $file) or die "Couldn't open location file: $!";
+while (<FILE>){
+	chomp $_;
+	$s .= $_;
+}	
+
+
+while ( $s =~ /(N{$x,})/g) {
+    my $end = pos($s);
+    my $start = $end - length($1) + 1;
+	#print "$start, $end, $1 \n";	# print this line to see length of each N stretch
+	#print length($1), "\n";
+	$countStretch ++;
+	$totN += length($1);
+	push (@lengths, length($1));
+	$max = length($1) if length($1) > $max;
+	$min = length($1) if length($1) < $min;
+}	
+if (scalar(@lengths)){
+	$avgLength = $totN / scalar(@lengths);
+}
+
+else {
+	print "No unknown bases found\n";
+	exit;
+}
+print "Total number of bases\t", length($s), "\n";
+print "Total number of unknown stretches\t", $countStretch, "\n";
+print "Total number of unknowns\t", $totN, "\n";
+print "Percentage of unknowns\t", $totN/length($s)*100, "\n";
+print "Average length of unknown stretch\t", $avgLength, "\n";
+print "Max/min length of unknown stretch\t$max\t$min\n";

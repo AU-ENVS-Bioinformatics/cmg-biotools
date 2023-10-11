@@ -1,0 +1,64 @@
+How to write a program/script for CMG-Biotools
+
+The programs included in the CMG-Biotools are comprised of three different types:
+- Programs published by outside sources, complete with native licenses and references [non-CBS program]
+- Programs written by CBS people, previously published or not [CBS program]
+- Programs written specifically for CMG-Biotools [bitools program]
+
+To standerdize the use of CMG-Biotools these guidelines should be followed when implementing a new program:
+- A biotools program should be written to follow the rules described bellow 
+- A CBS program should be re-written or enclosed in a wrapper to follow the rules described bellow
+- A non-CBS program should be enclosed in a wrapper to follow the rules described bellow
+
+All programs should be saved in the /usr/biotools folder.
+Programs that are not called directly but from within another program should be placed in the /usr/biotools/indirect folder
+All programs should be called with command line options and re-directs of output or input is not allowed on the commandline.
+Programs that calculate and then plots the results should be split in two parts, a calculateFeature program and a plotcalculateFeature program. 
+The plotting program takes as input the output from the calculationg program.
+
+#===== Example: =====
+# aminoAcidUsage -f file.orf.fsa -i file.orf.aminoAcidUsage
+# plot_aminoAcidUsage -f file.aminoAcidUsage -o file.aminoAcidUsage.ps
+
+Programs must not rely on special file extensions but instead include test of input before calculation.
+Test should/could include:
+- Is file in FASTA format
+- Is file in GenBank format
+- Is file in nuceotide format
+- Is file in amino acid format
+
+Commandline arguments should follow these standards:
+-f : input file
+This should be either one file (file.dat), an expression (*.dat) or a list (file1.dat file2.dat file3.dat)
+
+-o : output file name
+If multiple files are generated, -o should be left unused and output files should be named after the input file name.
+For example: program -f file.in => file.out1 file.out2 file.out3.
+
+-c : configuration file
+If program takes more information than a list of file names, this option shopuld be used to parse a configuration file to the program.
+If a configuration file is needed, a program should be made to construct it.
+The program should be named as config_programname
+
+All programs should have a USAGE varibale that will be printed if no arguments are given.
+Additional parameters should be described in the help/usage of the individual program.
+
+
+File tests in Perl: http://perldoc.perl.org/functions/-X.html
+
+Input files:
+- Test if file exists 
+- Test if file is right format
+- Test if file can be opened
+
+Output files:
+- Test that output file name is provided
+
+Print to output file in Perl:
+#=====	Print amino acid usage	
+open (OUT, ">$out") or die $!;
+foreach my $print_aa_key (@print_aa_array){
+	printf OUT "aa\t$print_aa_key\t%.4f\n", ($composition{$print_aa_key}/$total)*100;
+}
+close (OUT);
+

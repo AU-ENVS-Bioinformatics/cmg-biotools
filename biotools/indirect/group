@@ -1,0 +1,48 @@
+#!/usr/bin/perl
+
+# Authors: Peter Fisher Hallin
+# For license see /usr/biotools/CMG-biotools.license
+my %all;
+my %COMBINE;
+my %groupArray;
+
+while ( <> ) {
+	chomp;
+	my ($subject,$query) = split("\t");
+	$subject =~ s/^[\s]+//g;
+	$subject =~ s/[\s]+$//g;
+	$query =~ s/^[\s]+//g;
+	$query =~ s/[\s]+$//g;
+	$query = $subject unless $query =~ /[A-Z0-9]+/gi ;
+	$all{$query} = 1;
+	$all{$subject} = 1;
+	$COMBINE{$query}{$subject} = 1 ;
+	$COMBINE{$subject}{$query} = 1 ;
+}
+
+sub groupMainTree {
+	$groupCount=1;
+	foreach my $entry (keys %all) {
+		next if $included{$entry};
+		$included{$entry} = 1;
+		push @{$groupsArray{$groupCount}}, $entry;
+		group($entry);
+		$groupCount++;
+	}
+}
+
+sub group {
+	my $query = @_[0];
+	foreach my $subject (keys %{$COMBINE{$query}}) {
+		next if $included{$subject};
+		$included{$subject} = 1;
+		push @{$groupsArray{$groupCount}} , $subject;
+		group($subject);
+	}
+}
+
+&groupMainTree;
+
+foreach my $group_no ( sort { $a <=> $b } ( keys %groupsArray )) {
+	print "$group_no\t".($#{$groupsArray{$group_no}}+1)."\t".join("\t",@{$groupsArray{$group_no}})."\n";
+}

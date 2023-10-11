@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Authors: Karin Lagesen
+# For license see /usr/biotools/CMG-biotools.license
+
+# Purpose of this script is to take a set of files, extract one rRNA from it
+# that satisfies the scores, and to give it an unique name
+
+RESULTFILE=$1
+
+uniqid=1
+for f in `dir -d *.rrna`; do
+    python /usr/biotools/indirect/SelectHighScore_allLengths.py $f ${uniqid} >> ${RESULTFILE}
+    uniqid=`expr $uniqid + 1`
+done
+

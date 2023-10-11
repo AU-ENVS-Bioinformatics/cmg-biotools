@@ -1,0 +1,21 @@
+#!/usr/bin/perl
+
+# Authors: Tammi Camilla Vesth (tammi@cbs.dtu.dk)
+# For license see /usr/biotools/CMG-biotools.license
+
+# perl program.pl file.fna > file.fna.length
+
+use strict;
+use Bio::SeqIO;
+use Getopt::Long;
+
+
+# this implicity uses the <> file stream
+my $seqin = Bio::SeqIO->new( -format => 'fasta', -file => shift);
+
+while (my $seq = $seqin->next_seq()) {
+	my $len = $seq->length();
+	print ">", $seq->desc(), " ", $seq->id(), "_gene size kb $len\n";
+
+	#$seqout->write_seq($pseq)
+}

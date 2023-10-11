@@ -1,0 +1,77 @@
+#!/usr/bin/perl -w
+# Authors: Thomas Dybdal Pedersen
+# For license see /usr/biotools/CMG-biotools.license
+
+use strict;
+use Getopt::Long;
+
+#---------------------------------
+# INPUT CHECK
+#---------------------------------
+my ($organism,$config,$colour,$name, $ref);
+
+if ($#ARGV < 0){
+	print "#\n# USAGE: addBlastlane -f <query fasta file> -c <config file> -col <colour gradient> -name <query name>\n";
+	print "# Adds BLAST lane to atlas configuration file for a blast atlas.\n";
+	print "# This code can only add one lane at a time. Run in loop to add multiple lanes.\n";
+	print "# -f\tThe name of the fasta file to add <REQUIRED>\n";
+#	print "# -ref\tThe name of the fasta file of the reference <REQUIRED>\n";
+	print "# -c\tThe name of the config file created by blastAtlasCf <REQUIRED>\n";
+	print "# -col\tThe colour of the blast lane given as RRGGBB, with RR being level of red and so forth. Each can go from 00 to 10 (Default is 060010)\n";
+	print "# -name\tThe name for each of the given fasta files that should appear in the legend of the plot (Default is the filename)\n#\n";
+	exit;
+}
+GetOptions ("f=s"	=> \$organism,
+#		"ref=s"	=> \$ref,
+		"c=s"	=> \$config,
+		"col=s"	=> \$colour,
+		"name=s"	=> \$name
+);
+
+if (!defined $organism)	{ print "#\n# ERROR: No organism defined: use -f <organism>\n"; &print_usage	}
+if(! -e "${organism}")	{ print "#\n# ERROR: Missing FASTA file: ${organism}\n"; 	&print_usage	}
+
+#if (!defined $ref)	{ print "#\n# ERROR: No organism defined: use -ref <reference FASTA file>\n"; &print_usage	}
+#if(! -e "${ref}")	{ print "#\n# ERROR: Missing FASTA file: ${ref}\n"; 	&print_usage	}
+
+$name = $organism unless $name;
+
+if($colour){ $colour = "101010_".$colour }
+else { $colour = "101010_060010" }
+
+#---------------------------------
+# MODIFYING CONFIG FILE
+#---------------------------------
+open CONFIG, "<${config}";
+my (@newCFG, $dat, $circle, $file, $filewatch);
+#my $comparison = 	((split('\.', $ref))[0]."_".(split('\.', $organism))[0]);
+
+#print "$comparison\n";
+while(<CONFIG>){
+	$dat = 1 if /^dat /;
+	$circle = 1 if /^circle /;
+	$file = 1 if /^file /;
+	if((!/^dat / && $dat) && !/^#dat /){
+		if (`grep $organism.genomemap.gz ${config}`) { print "# Query already in config file: $organism\n"; exit }
+		push @newCFG,"dat $organism.genomemap.gz 1 0.0 0.0 0.0 \"$name\";\n";
+		$dat=0;
+	}
+	if((!/^circle / && $circle) && !/^#circle /){
+		push @newCFG,"circle $organism.genomemap.gz 1 \"$colour.cm2\" by 0.00 100.0;\n";
+		$circle=0;
+	}
+	if((!/^file / && $file) && !/^#file /){
+		push @newCFG,"file $organism.genomemap.gz dat;\n";
+		$file=0;
+		$filewatch=1;
+	}
+	push @newCFG,$_;
+}
+if(!$filewatch){ push @newCFG,"file $organism.genomemap.gz dat;\n" }
+
+close CONFIG;
+open NEWCONFIG, ">${config}";
+foreach(@newCFG){ print NEWCONFIG}
+close NEWCONFIG;
+
+

@@ -1,0 +1,6 @@
+[NCBI]
+data=/usr/biotools/blast/data
+
+[BLAST]
+BLASTDB=/usr/biotools/blast/db
+BLASTMAT=/usr/biotools/blast/data

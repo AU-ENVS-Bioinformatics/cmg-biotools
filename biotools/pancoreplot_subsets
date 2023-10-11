@@ -1,0 +1,661 @@
+#!/usr/bin/perl
+
+# Authors: Carsten Friis
+# For license see /usr/biotools/CMG-biotools.license
+
+# --------------------------------------------------------------------
+# %% Setting up %%
+#
+
+use strict;
+use Getopt::Long;
+use Bio::SeqIO;
+use Bio::Seq;
+
+# Handle input options
+my ($Last, @Org, $Disp, $Help, @Inter, @Comp, @CI, @Union);
+my $Slack = 0;
+my $ProgName = "coregenes.pl";
+my $Version  = "3.0";
+
+# Main options
+&GetOptions (
+	"c|cu|complementary=s" => \@Comp,   # If set, output genes complentary to these genomes
+	"ci|compinter=s"       => \@CI,     # If set, output genes complementary to the intersection of these genomes
+	"d|dispensable"        => \$Disp,   # If set, extract the dispensable genes instead
+	"i|intersection=s"     => \@Inter,  # Find intersecting genes between these genomes
+	"l|last=i"             => \$Last,   # Number of last organism to include - defaults to the last in the coreplot
+	"o|organisms=s"        => \@Org,    # Number of the organism(s) from which to extract the genes
+	"s|slack=i"            => \$Slack,  # Allow genes to be absent in 'slack' genomes and still be part of core
+	"u|union=s"            => \@Union,  # Find union genes between these genomes
+	"h|help"               => \$Help    # Prints the help text
+);
+
+
+# Want help?
+print_help() if (defined $Help);
+
+
+# Defaults
+my $Dir = $ARGV[0];
+die("ERROR! You must specify a valid directory. Run coregenome version 2.3 or later with the '-keep' option.\nRun $ProgName with the '-h' option for more help.\n") unless ((-r $Dir) && (-e "$Dir/tbl"));
+my @set_ids  = ();
+my @comp_ids = ();
+
+$Last  = (defined $Last ? $Last - 1 : `tail -1 $Dir/tbl | cut -f 1`);
+chomp $Last;
+
+@Inter = (scalar @Inter ? @Inter : "1:".($Last+1)) unless (scalar @Union);
+@Org   = unnest(prepare_set(@Org));
+@Inter = prepare_set(@Inter) if (scalar @Inter);
+@Union = prepare_set(@Union) if (scalar @Union);
+@Comp  = prepare_set(@Comp)  if (scalar @Comp);
+@CI    = prepare_set(@CI)    if (scalar @CI);
+
+
+
+
+
+
+# --------------------------------------------------------------------
+# %% Main Program %%
+#
+
+# Get family ids of common genes (the intersection of the genomes)
+print STDERR "Calculating the intersection between genomes\n" if (scalar @Inter);
+for my $ref (@Inter) {
+  push @set_ids, intersection(-ref => $Last, -sets => $ref, -slack => $Slack);
+}
+
+print STDERR "Calculating the union between genomes\n" if (scalar @Union);
+for my $a (@Union) {
+  push @set_ids, union(-ref => $Last, -sets => $a);
+}
+
+# Get family ids from complementary genomes
+print STDERR "Calculating the complementary intersecting gene set\n" if (scalar @CI);
+for my $a (@CI) {
+  push @comp_ids,  intersection(-ref => $Last, -sets => $a, -slack => $Slack);
+}
+
+print STDERR "Calculating the complementary union gene set\n" if (scalar @Comp);
+for my $a (@Comp) {
+  push @comp_ids, union(-ref => $Last, -sets => $a);
+}
+
+
+# Get family ids of common genes complementary to the complementary families
+@set_ids = complement(-set => \@set_ids, -relative => \@comp_ids);
+
+
+# Get the gene ids relative to the family ids
+my ($gene_ids_ref, $Org_ref) = gene_ids(-ref => $Last, -families => \@set_ids,
+                                        -seqref => \@Org, -sets => \@{ unnest(@Union, @Inter) });
+
+# Read genes from output organism(s)
+print STDERR "Extracting the gene sequences from the data\n";
+my @seqs;
+my $file_comments  = tbl2comments();
+my $group_comments = group2comments(-ref => $Last);
+for (@{ $Org_ref }) {
+  my $file = $Dir."/".$_.".fsa";
+  push @seqs, @{ read_seqs(-file => $file, -comment => $file_comments->{$file},
+                           -id_c => $group_comments) };
+}
+
+# Extract core genes from genome sequences 
+my $core_ref = grep_ids(-seqs => \@seqs, -ids => $gene_ids_ref, -v => $Disp);
+
+
+# Extract original id if possible
+my $core_ref = desc2id(@{ $core_ref });
+
+# Output core genes from output organism
+print STDERR "Outputting ".scalar @$core_ref." gene sequences\n";
+output_sequence(seqs => $core_ref, -fh => \*STDOUT, -format => 'fasta');
+
+exit;
+
+
+
+
+# --------------------------------------------------------------------
+# %% Land of the Subroutines %%
+#
+
+###################################
+# Read the tbl file and extract organism name, etc.
+# Returns:
+#   A hash of comments, indexed by file name
+
+sub tbl2comments {
+  my %out;
+  open (TBL, "$Dir/tbl") or die "Error! Cannot read from tbl file??!";
+  while (<TBL>) {
+    @_ = split /\t|\n/, $_;
+    $out{$Dir."/".$_[0].".fsa"} = "/organism=\"".$_[1]."\"";
+  }
+  close TBL;
+  return wantarray ? %out : \%out;
+}
+
+
+
+
+###################################
+# Assign the gene family number as comment
+# Arguments should be:
+#   -ref      => The id number of the group file to use
+# Returns:
+#   A hash of comments, indexed by gene id
+
+sub group2comments {
+  my %args = @_;
+  my %out;
+  open (GRP, "$Dir/group_".$args{-ref}.".dat") or die "Error! Cannot read from group files??!";
+  while (<GRP>) {
+    my ($gf, undef, @a) = split /\t|\n/, $_;
+    my $gfs = scalar @a;
+    for (@a) {
+      $out{$_} = "/gene_family=\"".$gf."\" /family_size=\"".$gfs."\"";
+    }
+  }
+  close GRP;
+  return wantarray ? %out : \%out;
+}
+
+
+
+
+###################################
+# Prepare sets
+
+sub prepare_set {
+#  @_ = split ",", join(",", @_);
+  for (@_) {
+    my @set = split ",", $_;
+    for (@set) {
+      $_ = (/([0-9]+)[:\-]([0-9]+)/ ? join(",", ($1 .. $2)) : $_);
+      $_ = (/([0-9]+)[:\-]/ ? join(",", ($1 .. $Last + 1)) : $_); # Remember that $Last is a zero-based index
+    }
+    @set = split ",", join(",", @set);
+    for (@set) {$_ -= 1} # Set arrays need be zero-based
+    my @a = sort {$b <=> $a} @set; # Test that all genomes specified actually exist
+    if ($a[0] > $Last) {die "You specified a non-existing genome (No. ".($a[0]+1)."). Last genome in set is no. ".($Last+1).".\n"}
+    $_ = \@set;
+  }
+  return @_;
+}
+
+
+
+
+###################################
+# Dereference a nested array, merging all non-referece values into one flat array similar to R's 'unlist' command.
+# Arguments should be a nested array or a reference to one
+# Returns:
+#   An 'unnested' array (or a reference to one) of all non-reference values from the nested array
+
+sub unnest {
+  my @out;
+  for (@_) {
+    push @out, $_ unless (ref $_);
+    push @out, ${ $_ } if (ref $_ eq "SCALAR");
+    push @out, unnest(@{ $_ }) if (ref $_ eq "ARRAY");
+    push @out, unnest(values %{ $_ }) if (ref $_ eq "HASH");
+  }
+  return wantarray ? @out : \@out;
+}
+
+
+
+
+###################################
+# Find the identifiers for the intersection of the specified sets (i.e. the common genes)
+# Arguments should be:
+#   -ref    => The id number of the group file to use
+#   -sets   => The id number of the genomes for which to find the intersecting genes
+#   -slack  => [Optional] Allow gene to be absent in N genomes and still be considered core
+# Returns:
+#   An array of identifiers for the common genes
+
+sub intersection {
+  my %args = @_;
+  my @out = ();
+  my (%sets, $l);
+  for (@{ $args{-sets} }) {
+    my $md5 = `head -1 $Dir/$_.fsa | perl -pe 's/^>|[.][0-9]+|\\s.*//g'`;
+    chomp $md5;
+    $sets{$md5} = $_;
+  }
+  open GRP, "$Dir/group_".$args{-ref}.".dat" or die;
+  while (<GRP>) {
+    my ($group_id, $count, @members) = split /\t/, $_;
+    my %repr;
+    for (@members) {
+      next unless /^(.*)(\..*)/;
+      push @{ $repr{$1} }, $1.$2;
+    }
+    my $i = 0;
+    for (keys %repr) {
+      $i++ if (exists $sets{$_});
+    }
+    push @out, $group_id if (scalar ( keys %sets ) >= 1 and 
+                             scalar ( keys %sets ) <= $i and
+                             scalar ( keys %sets ) >= $i - $args{-slack});
+  }
+  close GRP;
+  return wantarray ? @out : \@out;
+}
+
+
+
+
+###################################
+# Find the identifiers for the union of the specified sets (i.e. all genes)
+# Arguments should be:
+#   -ref    => The id number of the group file to use
+#   -sets   => The id number of the genomes for which to find the union genes
+# Returns:
+#   An array of identifiers for the common genes
+
+sub union {
+  my %args = @_;
+  my @out = ();
+  my %sets;
+  for (@{ $args{-sets} }) {
+    my $md5 = `head -1 $Dir/$_.fsa | perl -pe 's/^>|[.][0-9]+|\\s.*//g'`;
+    chomp $md5;
+    $sets{$md5} = $_;
+  }
+  open GRP, "$Dir/group_".$args{-ref}.".dat" or die;
+  while (<GRP>) {
+    my ($group_id, $count, @members) = split /\t/;
+    my %repr;
+    for (@members) {
+      next unless /^(.*)(\..*)/;
+      push @{ $repr{$1} }, $1.$2;
+    }
+    my $i = 0;
+    for (keys %repr) {
+      if (exists $sets{$_}) {
+        push @out, $group_id;
+        last;
+      }
+    }
+  }
+  close GRP;
+  return wantarray ? @out : \@out;
+}
+
+
+
+
+###################################
+# Find the identifiers for the complement of the specified set given relative
+# Arguments should be:
+#   -set      => Reference to an array
+#   -relative => Reference to an array with the complement set
+# Returns:
+#   An array of with the complement elements
+
+sub complement {
+  my %args = @_;
+  my @out = ();
+  my %relative;
+  for (@{ $args{-relative} }) {
+    $relative{$_} = 1;
+  }
+  for (@{ $args{-set} }) {
+    push @out, $_ unless (exists $relative{$_});
+  }
+  return wantarray ? @out : \@out;
+}
+
+
+
+
+###################################
+# Find the gene identifiers of the gene family members
+# Arguments should be:
+#   -ref      => The id number of the group file to use
+#   -families => The family ids for which to find gene members
+#   -seqref   => [Optional] The id number of the genome(s) from which to extract the 
+#		  sequence of the relevant gene families. (The sequence reference) If
+#		  omitted. extracts the first identifiable gene for each gene family.
+#   -sets     => [Optional] If -seqref is omitted, try to extract the ids from these
+#		  genomes instead. Defaults to "from genome one to the last".
+# Returns:
+#   An array of identifiers for the common genes
+
+sub gene_ids {
+  my %args = @_;
+  my @out = ();
+  my %fam;
+  for (@{ $args{-families} }) {
+    $fam{$_} = 1;
+  }
+  my (%seqref, @allref);
+  if (scalar @{ $args{-seqref} }) {
+    for (@{ $args{-seqref} }) {
+      my $md5 = `head -1 $Dir/$_.fsa | perl -pe 's/^>|[.][0-9]+|\\s.*//g'`;
+      chomp $md5;
+      $seqref{$md5} = $_;
+    }
+  } else {
+    my $i = 0;
+    while (-e "$Dir/$i.fsa") {
+      next if (scalar @{ $args{-sets} } and not scalar grep /^$i$/, @{ $args{-sets} });
+      my $md5 = `head -1 $Dir/$i.fsa | perl -pe 's/^>|[.][0-9]+|\\s.*//g'`;
+      chomp $md5;
+      $allref[$i] = $md5;
+     } continue {
+      $i++;
+    }
+  }
+  open GRP, "$Dir/group_".$args{-ref}.".dat" or die;
+  while (<GRP>) {
+    my ($group_id, $count, @members) = split /\t/;
+    next unless (exists $fam{$group_id});
+    my %repr;
+    for (@members) {
+      next unless /^(.*)(\..*)/;
+      push @{ $repr{$1} }, $1.$2;
+    }
+    if (scalar @allref) {
+      for (0..$#allref) {
+        if (exists $repr{$allref[$_]}) {
+          push @out, $repr{$allref[$_]}->[0];
+          $seqref{$allref[$_]} = $_;
+          last;
+        }
+      }
+    } else {
+      for (keys %seqref) {
+        push @out, @{ $repr{$_} } if (exists $repr{$_});
+      }
+    }
+  }
+  close GRP;
+  return \@out, [values %seqref];
+}
+
+
+
+
+###################################
+# Finds sequences with specific ids in an array of Bio::Seq objects
+# Args:
+#   -seqs => A reference to an array with Bio::Seq objects
+#   -ids  => A reference to an array of ids
+#   -v    => Like for grep, if defined, return the ids which didn't match
+# Returns
+#   An array (or array reference) with the Bio::Seq objects having the requested ids
+
+sub grep_ids {
+  my %argv = @_;
+  my %ids;
+  for my $id (@{ $argv{-ids} }) {
+    $ids{$id} = 1;
+  }
+  my @out;
+  for my $seq (@{ $argv{-seqs} }) {
+    if (exists $ids{$seq->id()}) {
+      push @out, $seq unless (defined $argv{-v});
+    } elsif (defined $argv{-v}) {
+      push @out, $seq;
+    }
+  }
+  return wantarray ? @out : \@out;
+}
+
+
+
+
+###################################
+# Reads one sequence file in a format supported by BioPerl
+#   - This version is capable of modifying the description field
+# Arguments should be an array:
+#   Filenames to be loaded, ideally the @ARGV array
+#   -fh       => The filehandle to read from, defaults to ARGV
+#   -read     => The number of sequences to return, default is all of them
+#   -numids   => If set, replace existing sequence ids with unique numeric ones
+#		    starting with the value of numids
+#   -format   => The file format, defaults to Fasta
+#   -comment  => Text string to append as comment to each sequence
+#   -id_c     => Ref to hash of comments, indexed by sequence id
+#   <...>     => Additional options to Bio::SeqIO
+# Returns:
+#   A reference to an array of Bio::Seq objects
+
+sub read_seqs {
+  my %args     = @_;
+  $args{-fh}   = \*ARGV unless (exists $args{-fh} or exists $args{-file});
+  my $read     = (exists $args{-read} ? delete $args{-read} : -1);
+  my $num_ids  = delete $args{-numids};
+  my $comment  = delete $args{-comment};
+  my $id_c     = delete $args{-id_c};
+  my $entries  = 0;
+  my (@seqs, %ids);
+  $args{-format} = "fasta" unless (exists $args{-format});
+  my $seq_in = ($args{-format} =~ /^tab/i ? Bio::SeqIO::tab->new(%args)
+                                          : Bio::SeqIO->new(%args));
+  while (($entries++ != $read) && (my $seq = $seq_in->next_seq)) {
+    if (exists $id_c->{$seq->id()}) {
+      $seq->description(join(" ", $seq->description(), $id_c->{$seq->id()}));
+    }
+    if (defined $comment) {
+      $seq->description(join(" ", $seq->description(), $comment));
+    }
+    $seq->id($num_ids++) if (defined $num_ids);
+    push @seqs, $seq;
+    warning("Warning! Multiple sequences found with the same identifier!\nSequences may not be processed correctly\n") if (exists $ids{$seq->id});
+  }
+  return \@seqs;
+}
+
+
+
+
+###################################
+# Extract ids from description field if possible
+# Arguments should be an array of Bio::Seq objects
+# Returns:
+#   An array of Bio::Seq objects with the ids exchanged
+
+sub desc2id {
+  for (@_) {
+    if (defined $_->description) {
+      my ($id, @desc) = split / /, $_->description;
+      $_->id($id);
+      $_->description(join(" ",@desc));
+    }
+  }
+  return (wantarray ? @_ : \@_);
+}
+
+
+
+
+###################################
+# Output in sequence formats supported by bioperl
+# Arguments should be a hash:
+#   seqs   => A reference to an array of sequences. Values are ids or Bio::Seq objects
+#   Any additional arguments will be forwarded to the Bio::SeqIO->new() call.
+#      If these don't include either -fh or -file STDOUT will be used
+# Returns:
+#   The filehandle and filename
+
+sub output_sequence {
+  my %args = @_;
+  my $seqs_ref = delete $args{seqs};
+  my $i = 1;
+  $args{-fh} = \*STDOUT unless (exists $args{-fh} or exists $args{-file});
+  my $seq_out = Bio::SeqIO->new(%args);
+
+  for my $seq (@{ $seqs_ref }) {
+    $seq_out->write_seq($seq);
+  }
+
+  return ($args{-fh}, $args{-file});
+}
+
+
+
+
+
+
+# --------------------------------------------------------------------
+# %% Help Page/Documentation %%
+#
+
+sub print_help {
+  open LESS, "| less";
+  print LESS <<EOH;
+
+SYNOPSIS
+	$ProgName [Options] [Directory]
+
+DESCRIPTION
+	Output the genes/gene families in common or complementary between
+	genomes in a coreplot. The directory argument must be of the type
+	created as temporary directory by the coregenome script version 2.3 or
+	later.
+
+	If '-o' is unspecified (the default), the program will print one
+	representant for each gene family, selected somewhat randomly. Due to
+	speed issues, the program tries to extract the genes from as few genomes
+	as possible. If '-o' is used, all members of the relevant gene families
+	will be extracted from the genomes specified.
+
+	NOTE ON '[integers]': Genomes must be specified by their number in the
+	order displayed on the coreplot (because that is how they are named in
+	the coregenome script). Individual values can be separated by commas,
+	while ranges can be specified using ':'or '-'. The final value in a
+	range can be omitted, letting the range terminate at the last genome in
+	the set (or, if '-l' was specified, whatever genome was given there).
+	The various options can be specified several times and will be
+	intrepreted as a request for several core genomes simultaneously, one
+	from each subset indicated.
+
+	See examples below.
+
+	DEFAULT: If neither '-u' nor '-i' is specified, the default is to select
+	the intersection (i.e. core gene families) of all genomes up to and
+	including the last genome in the set (or, if '-l' was specified,
+	whatever genome	was given there).
+
+OPTIONS
+     -c or -cu or --complementary [integers]
+	If set, output only from gene families which are complentary to (i.e. 
+	not present in) the union of these genomes. See note above on [integers]
+	for how to specify genomes.
+
+     -ci or --compinter [integers]
+	If set, output only from gene families which are complentary to the
+	intersection of these genomes - i.e. not present in the core of these
+	genomes. See note above on [integers] for how to specify genomes.
+
+     -d or --dispensable
+	If set, reverses the outputting behaviour so that genes formerly to be
+	outputted are discarded and the genes which would normally have been
+	discarded are instead outputted. The option is named for its ablilty to
+	output the dispensable/auxiliary genes instead of the core genes.
+
+     -i or --intersection [integers]
+	Find intersecting (i.e. common) gene families between these genomes.
+	Accepts same format as '-c'. See note above on [integers] for how to
+	specify genomes.
+
+	NOTE: Specifying both '-i' and '-u' is valid, but if the sets overlap,
+	then those genes obeying both restrictions will be extracted twice. This
+	is considered a feature and not a bug :-).
+
+     -l or --last [integer]
+	The index of the last organism from the core genome plot to include in
+	the calculation of the core genome. Defaults to the last organism in the
+	plot.
+
+     -o or --organisms [integers]
+	The index of the organisms for which to output the genes. If specified
+	the program outputs all genes from selected gene families and specified
+	organism(s). See note above on [integers] for how to specify genomes.
+
+	If unspecified, the program will print one representant for each gene
+	family, selected somewhat randomly. Due to speed issues, the program
+	tries to extract the genes from as few genomes as possible.
+
+     -s or --slack [integer]
+	Number of genomes a gene is allowed to be missing from and still be
+	considered part of the core genome. This would normally only be set if
+	the slack option was used with the 'coregenome' script when the input
+	directory was created, and then only to the value used there.
+
+     -u or --union [integers]
+	Find the union of gene families (i.e. all genes) from these genomes. See
+	note above on [integers] for how to specify genomes.
+
+	NOTE: Specifying both '-i' and '-u' is valid, but if the sets overlap,
+	then those genes obeying both restrictions will be extracted twice. This
+	is considered a feature and not a bug :-).
+
+     -h or --help
+	Prints this text.
+
+EXAMPLES
+    $ProgName -i 1:3,5:7 [Directory]
+	Gives you the core gene families of genomes 1, 2, 3, 5, 6, and 7.
+
+    $ProgName -i 1: [Directory]
+	Gives the core gene families of all genomes in the set. This is
+	actually the default, used if no options are given.
+
+    $ProgName -i 1,3:5 -c 6: [Directory]
+	Gives the core gene families of genomes 1, 3, 4 and 5 which are not
+	present in any of the genomes from 6 and on to the last. In this
+	command, genome 2 is not considered at all.
+
+    $ProgName -i 1:3 -i 5:7 [Directory]
+	Gives the core genome of organisms 1, 2 and 3 as well as the core genome of
+	5, 6 and 7. This is a larger set different from '-i 1:3,5:7' above.
+
+    $ProgName -u 1:5 -ci 7:9 -ci 8:10 [Directory]
+	Gives the part of the pan-genome of organisms 1 through 5 which is
+	neither in the core genome of 7, 8 and 9 or in the core genome of 8, 9
+	and 10. Yes, subsets can overlap.
+
+VERSION
+    Current: $Version
+
+    Version 3.0 introduced the use of subsets the syntax for which isn't 100 %
+    backwards compatible. Briefly, options like '-i 1:3,5:7' and '-i 1:3 -i 5:7'
+    would be equivalent in previous versions, now they are not. Also fixed an
+    elusive bug which could occur if both '-i' and '-u' was used together.
+
+    Version 2.9 allows omitting the last number in a range signifing the last
+    genome. Help text expanded and reorganized.
+
+    Version 2.8 added the '-u' option. Added 'family_size' to the description
+    field of the extracted genes.
+
+    Version 2.7 added new non-default behaviour for '-o' allowing you to extract
+    all members of selected gene families from several organisms.
+
+    Version 2.6 added new default behaviour for the '-o' and the '-ci' option.
+    Note that the old default behaviour can be obtained by explicitly setting
+    '-o 1'.
+
+    Version 2.5 added the '-c' and '-i' options.
+    Substantial re-write of core functions were needed for this.
+    New core functions should also perform faster.
+
+    Version 2.4c introduced the 'slack' option. Also, the version number was
+    adjusted to correspond to the coregenome script.
+
+AUTHOR
+    Carsten Friis, carsten\@cbs.dtu.dk,
+
+EOH
+  close LESS;
+  exit;
+}

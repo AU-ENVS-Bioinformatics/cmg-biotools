@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Authors: Karin Lagesen
+# For license see /usr/biotools/CMG-biotools.license
+
+if [ -z "`ls *.fsa`" ] ; then
+    exit 1
+fi
+
+ls *.fsa > /tmp/filelist.txt
+cat /usr/biotools/indirect/blastmatrix.head.xml > /tmp/thislist.xml
+python /usr/biotools/indirect/MakeSourceSet.py /tmp/filelist.txt >> /tmp/thislist.xml
+cat /tmp/thislist.xml
+rm /tmp/thislist.xml /tmp/filelist.txt

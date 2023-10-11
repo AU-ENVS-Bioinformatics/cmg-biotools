@@ -1,0 +1,159 @@
+#!/usr/bin/perl -w
+# Authors: Tammi Camilla Vesth (tammi@cbs.dtu.dk)
+# For license see /usr/biotools/CMG-biotools.license
+
+use strict;
+use Bio::SeqIO;
+use Bio::Tools::SeqStats;
+use Getopt::Long;
+use Cwd;
+#use Dumper;
+
+#===============================================================
+# This code selects the best 16S rRNA sequence from a library of rna files
+# The input would normally be the output of RNAmmer analysis
+# The best sequence is defined as a sequence with an acceptable length (set by user or default)
+# and the highest score
+#
+# First, the higest scoring sequence is identified based on string searches of FASTA headers
+# Next the length of that sequence is compared to the criteria
+# If the highest scoring sequence follows the length requirments it is selected
+#
+# Usage:
+# > select16SrRNA -out all.fna -min 1100
+=put
+# Selecting the sequence with highest score and length between 1400 and 2000
+# Default is 1400 - 1800 base pairs, change using -min and -max
+#
+# Program is writing to file called selected16SrRNA.fna
+# Default output file is selected16SrRNA.fna, change using -out
+#
+# Number of files to be evaluated (extension *.rrna): 9
+# Number of files with no sequences: 0
+
+Score: 1877.1 :: /molecule=16s_rRNA /score=1877.1 :: Veillonella_sp_oral_taxon_780_str_F0422_ID_AFUJ00000000.rrna
+Score: 1861.6 :: /molecule=16s_rRNA /score=1861.6 :: Veillonella_sp_3_1_44_ID_ADCV00000000.rrna
+Score: 1862.2 :: /molecule=16s_rRNA /score=1862.2 :: Veillonella_sp_6_1_27_ID_ADCW00000000.rrna
+Unacceptable length: 1369 :: /molecule=16s_rRNA /score=1512.8 :: Veillonella_atypica_ACS-049-V-Sch6_ID_AEDR00000000.rrna
+Score: 1859.5 :: /molecule=16s_rRNA /score=1859.5 :: Veillonella_parvula_DSM_2008_ID_CP001820.rrna
+Score: 1870.5 :: /molecule=16s_rRNA /score=1870.5 :: Veillonella_dispar_ATCC_17748_ID_ACIK00000000.rrna
+Score: 1870.5 :: /molecule=16s_rRNA /score=1870.5 :: Veillonella_dispar_ATCC_17748_ID_ACIK00000000.rrna
+Score: 1871.2 :: /molecule=16s_rRNA /score=1871.2 :: Veillonella_atypica_ACS-134-V-Col7a_ID_AEDS00000000.rrna
+Score: 1848.5 :: /molecule=16s_rRNA /score=1848.5 :: Veillonella_parvula_ATCC_17745_ID_ADFU00000000.rrna
+Score: 1860.5 :: /molecule=16s_rRNA /score=1860.5 :: Veillonella_sp_oral_taxon_158_str_F0412_ID_AENU00000000.rrna
+=cut
+#===============================================================
+
+#===============================================================
+# Options, help and information
+#===============================================================
+# Help information
+my $use = "#===============================================================
+# Usage: 
+# > select16SrRNA [-out all.fna] [-min 1100] [-max 1500]
+# Reads all files in current working directory with file extension '.rrna'
+# Options are optional, defaults are: 
+# -out = selected16SrRNA.fna
+# -min = 1400 
+# -max = 1800
+# Must be run in directory with RNA FASTA files
+#===============================================================\n"; 
+
+# Get options from commandline or set to defaults if not defined
+GetOptions(
+'h|help|?' => \(my $help),
+'out:s' => \(my $out = "selected16SrRNA.fna"),
+'min:i' => \(my $min = 1400), 
+'max:i' => \(my $max = 1800));
+
+# Print help if option -h or -help (if $help defined at all)
+if ( $help ) { die $use}
+
+# Test if maximum length is alrger than minimum length
+if ( $max <= $min ) { die "# PROGRAM TERMINATED: Max length ($max) must be larger than minimum length ($min)!\n"};
+
+# Get all relevant filenames from current working directory
+opendir (DIR, getcwd) or die "$!";
+my @files = grep {/rrna/} readdir DIR;
+close DIR;
+
+# Kill and warn if no relevant files were found
+if ( scalar(@files) < 1 ) { die "# PROGRAM TERMINATED: no files called *rrna found in dir: ", getcwd, "!\n"};
+
+# Count how many files are empty and write the number as information to user
+my $count = 0;
+foreach my $x (@files){ $count ++ if (-z $x == 1 ); }
+
+# Print option setup values to screen
+print "#===============================================================
+# Selecting the sequence with highest score and length between $min and $max
+# Default is 1400 - 1800 base pairs, change using -min and -max
+#
+# Program is writing to file called $out
+# Default output file is selected16SrRNA.fna, change using -out
+#
+# Number of files to be evaluated (extension *.rrna): ",scalar(@files),"
+# Number of files with no sequences: " , $count, "
+#===============================================================\n";
+
+
+#===============================================================
+# MAIN
+#===============================================================
+# Read each file and extract score and length from header and sequence
+# Store information in hash of hash, one HoH per file
+# %HoH = (	sequence1 => { score => "1244", length => "1400", sequence => 'ATCGCTGCTAGCTAGTCG'.....},
+#		sequence2 => { score => "1300", length => "1600", sequence => 'ATCGCTGCTAGCTAGTCG'.....},    
+#		sequence3 => { score => "1600", length => "1000", sequence => 'ATCGCTGCTAGCTAGTCG'.....},);
+
+# Open file for writing
+my $seqioOUT = Bio::SeqIO-> new(-file => ">$out",-format => "fasta");
+my (%HoH, $seq, %hash, $maxScore);
+
+
+# Evaluate each file and find best seqeucne in each file
+foreach my $file (@files){
+	$maxScore = 0;
+	# Create sequence in/out object
+	my $seqioIN = new Bio::SeqIO(-format => 'fasta', -file   => $file);
+	
+	# Create and run trough all sequence objects
+	while( $seq = $seqioIN->next_seq ) {
+		$seqioIN->next_seq unless defined $seq ;
+ 
+		# Pattern match to find score in second half of header (desc)
+		$seq->desc() =~ m/score=(\d+\.\d+)/;		
+		$HoH{$file}{'score'} = $1;	
+
+		$HoH{$file}{'length'} = $seq->length();	# Sequence length
+		$HoH{$file}{'seq'} = $seq->seq();	# Sequence it self
+		$HoH{$file}{'id'} = $seq->id($file);	# Sequence id chnaged to filename
+		$HoH{$file}{'obj'} = $seq;	# Sequence object
+
+		# Set maxscore to new score if higher than exsisting maxscore
+		if ($HoH{$file}{'score'} > $maxScore) {
+			$HoH{$file}{'maxscore'} = $HoH{$file}{'score'};
+		}	
+	}
+}
+
+
+foreach my $x (sort keys %HoH) {
+	#print "TEST:: $x :: $HoH{$x}{'score'}\n";
+	# Test if sequence is highest scoring sequence
+	if ($HoH{$x}{'score'} >= $HoH{$x}{'maxscore'}) {
+
+		# Test of length is acceptable
+		if ($HoH{$x}{'length'} > $min && $HoH{$x}{'length'} <= $max){
+			print "# Score: ", $HoH{$x}{'score'} , " :: " , $HoH{$x}{'maxscore'} , " :: Length " , $HoH{$x}{'length'}  , " :: ", $x ,"\n";
+			
+			# Write this sequence to output file
+			$seqioOUT->write_seq($HoH{$x}{'obj'});
+		}
+		# Print message about unacceptable sequence on screen			
+		else {
+			print "# Unacceptable length: ",  $HoH{$x}{'length'} , " :: " , $HoH{$x}{'obj'}->desc()  , " :: " , $x ,"\n";
+		}
+	}
+}
+

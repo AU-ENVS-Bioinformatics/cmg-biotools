@@ -1,0 +1,52 @@
+<?xml version='1.0'?>
+<compare>
+	<descriptions>
+		<title>Proteome comparison of genomes in all groups</title>
+		<subtitle>ALR: 0.50, identify: 0.50</subtitle>
+	</descriptions>
+	<parameters>
+		<!--<evalue>1e-10</evalue> -->
+		<identity>0.5</identity>
+		<alr>0.5</alr>
+		<level>prot</level>
+	</parameters>
+	<settings>
+		<title_font_size>0.4</title_font_size>
+		<subtitle_font_size>0.2</subtitle_font_size>
+		<keep_reports>yes</keep_reports>
+		<reuse_reports>yes</reuse_reports>
+		<work_dir>./bm-cache</work_dir>
+		<paralogs>
+			<range_from>auto</range_from>
+			<range_to>auto</range_to>
+			<from_color>
+				<r>0.9</r>
+				<g>0.9</g>
+				<b>0.9</b>
+			</from_color>
+			<to_color>
+				<r>0.975</r>
+				<g>0</g>
+				<b>0</b>
+			</to_color>
+		</paralogs>
+		<orthologs>
+			<range_from>auto</range_from>
+			<range_to>auto</range_to>
+			<from_color>
+				<r>0.9</r>
+				<g>0.9</g>
+				<b>0.9</b>
+			</from_color>
+			<to_color>
+				<r>0</r>
+				<g>0.975</g>
+				<b>0</b>
+			</to_color>
+		</orthologs>
+	</settings>
+	<sources>
+
+
+
+

@@ -1,0 +1,83 @@
+#!/usr/bin/perl -w
+# Authors: Tammi Camilla Vesth (tammi@cbs.dtu.dk)
+# For license see /usr/biotools/CMG-biotools.license
+
+use strict;
+use Bio::SearchIO; 
+
+=put
+for x in *fsa; do formatdb -i $x -p T -t 1; done
+for x in *fsa; do /usr/biotools/blast/bin/blastall -F 0 -p blastp -d $x -e 1e-5 -m 7 < type.txt > $x.type.blastout ; done
+for x in *type.blastout; do /usr/biotools/blastallToHeatmapParser.pl $x >> results.tab ; done
+
+
+dat <- read.table("/home/tammi/TEMP/results.tab", header=F)
+str(dat)
+'data.frame':	354 obs. of  3 variables:
+ $ V1: Factor w/ 35 levels "AFHQ01000001_AFH_CDS_10876-10106",..: 1 2 3 4 5 6 7 8 9 10 ...
+ $ V2: num  0 0 0 0 0 ...
+ $ V3: Factor w/ 10 levels "A.fsa","F.fsa",..: 1 1 1 1 1 1 1 1 1 1 ...
+matrix <- xtabs(V2 ~ V3 + V1, data = dat)
+heatmap(matrix)
+
+=cut
+
+my $file = $ARGV[0];
+my $largest = 0;
+my %matrix;
+my %sets;
+my $in = new Bio::SearchIO(-format => 'blastxml', -file   => $file);
+my $db;
+
+
+while( my $result = $in->next_result ) {
+	my $query_name = $result->query_name;	
+	$db = $result->database_name ;
+	# Create entry for each query sequence, fixed size heatmap
+	$matrix{$query_name}{"nohit"} = 0;
+
+	## $result is a Bio::Search::Result::ResultI compliant object
+	while( my $hit = $result->next_hit ) {
+
+		if ($hit->length > $result->query_length) {
+			$largest = $hit->length; 
+		}elsif($hit->length <= $result->query_length) {
+			$largest = $result->query_length;
+		}
+
+		while( my $hsp = $hit->next_hsp ) {     
+      
+		## $hsp is a Bio::Search::HSP::HSPI compliant object
+			if( $hsp->length('total') > 0.5*$largest ) {
+				if ( $hsp->percent_identity >= 50 ) {
+
+					# Remove the nohit version of this specific query					
+					delete($matrix{$query_name}{"nohit"});
+					
+					# If a match has already been found, test if the found hit score is better than the new one
+					my $hit_name = $hit->name;
+					if (exists $matrix{$query_name}{$hit_name}) {
+						my $test = 	$matrix{$query_name}{$hit_name};
+						$matrix{$query_name}{$hit_name} = ($hsp->percent_identity) unless $test >= $hsp->percent_identity;				
+					} else{					
+						$matrix{$query_name}{$hit_name} = ($hsp->percent_identity) ;
+					}
+				}
+			}
+		}  
+	}
+}
+
+
+#my $outfile = $file.".matrix";
+#open (OUT, ">", $outfile);
+
+
+for my $k1 (sort keys %matrix) {
+	for my $k2 (sort keys %{ $matrix{$k1} }) {
+		#printf "%s\t%.3f\t%s\t%s\n", $k1, $matrix{$k1}{$k2}, $k2, $db;
+		printf "%s\t%.3f\t%s\n", $k1, $matrix{$k1}{$k2}, $db;
+
+	}
+}
+

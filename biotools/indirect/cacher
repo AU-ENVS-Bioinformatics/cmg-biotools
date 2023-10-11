@@ -1,0 +1,107 @@
+#!/usr/bin/perl
+# Authors: Peter Fisher Hallin
+# For license see /usr/biotools/CMG-biotools.license
+
+# this script allows a user/program to cache data using an identifier (id) and a source (source),
+# these two entities constitute a primary key in the mysql cache table and is used to identify your 
+# content.
+# the way to check if cached content exist or not is to request it, and check return status
+# status will be 2 (!=0) when non-existent queries are done
+
+use DBI;
+use strict;
+use Getopt::Long;
+
+my ($action,$source,$id,$expire,$dbh,$idx,$sth);
+
+eval { $dbh = DBI->connect("DBI:mysql:cache:localhost", 'www', '', {RaiseError => 1, PrintError => 1} )  } or ret("16:".$DBI::errstr."\n",1);
+
+GetOptions (
+ "source=s" => \$source, 
+ "id=s" => \$id ,
+ "expire=s" => \$expire, # expire this many days from now
+ "action=s" => \$action ,  # get, put, rem
+);
+
+$expire = "0" unless defined $expire;
+# usage, retrive a record:
+# cacher -source 'SignalP-epipe' -id 'e1c06d85ae7b8b032bef47e42e4c08f9-euk-short' -action get
+
+# usage, store a record
+# echo "hello" | cacher -source 'SignalP-epipe' -id 'e1c06d85ae7b8b032bef47e42e4c08f9-euk-short' -action put
+
+# usage, remove a record
+# cacher -source 'SignalP-epipe' -id 'e1c06d85ae7b8b032bef47e42e4c08f9-euk-short' -action rem
+
+######### RETRIEVING ############
+
+if ( $action eq "test" ) {
+	# first, get rid of expired records
+	eval { 
+		$sth = $dbh->prepare("delete from cache.cache where expire < now() or isnull(expire)"); 
+		$sth->execute();
+	} or die $DBI::errstr;
+	# on non existent records, cacher returns 2. All other errors returns 1.
+	my $exit = 2;
+	eval { 
+		$sth = $dbh->prepare("SELECT SQL_CACHE id from cache.cache where id = ? and source = ?"); 
+		$sth->execute($id,$source);
+	} or ret("48:$DBI::errstr\n",1);
+	while ( defined ( $idx = $sth->fetchrow_hashref)) {
+		$exit = 0;
+		print $idx->{a};
+	}
+	exit $exit;
+}
+
+if ( $action eq "get" ) {
+	# first, get rid of expired records
+	eval { 
+		$sth = $dbh->prepare("delete from cache.cache where expire < now() or isnull(expire)"); 
+		$sth->execute();
+	} or die $DBI::errstr;
+	# on non existent records, cacher returns 2. All other errors returns 1.
+	my $exit = 2;
+	eval { 
+		$sth = $dbh->prepare("UPDATE cache.cache SET usg = usg + 1 where id = ? and source = ?"); 
+		$sth->execute($id,$source);
+		$sth = $dbh->prepare("SELECT SQL_CACHE UNCOMPRESS(content) as a from cache.cache where id = ? and source = ?"); 
+		$sth->execute($id,$source);
+	} or ret("69:$DBI::errstr\n",1);
+	while ( defined ( $idx = $sth->fetchrow_hashref)) {
+		$exit = 0;
+		print $idx->{a};
+	}
+	exit $exit;
+}
+
+############ STORING ##############
+if ( $action eq "put" ) {
+	binmode STDIN;
+	my $content = "";
+	while (<STDIN>) {
+		$content .= $_;
+	}
+	close STDIN;
+	eval { 
+		$sth = $dbh->prepare("REPLACE INTO cache.cache (id,source,expire,content) VALUES (?,?,DATE_ADD(NOW(),INTERVAL $expire DAY),compress(?))"); 
+		$sth->execute($id,$source,$content);
+	} or ret("88:$DBI::errstr\n",1);
+	exit 0;
+}
+
+############ REMOVING ##############
+if ( $action eq "rem" ) {
+	eval { 
+		$sth = $dbh->prepare("DELETE FROM cache.cache where id=? and source=?"); 
+		$sth->execute($id,$source);
+	} or ret("97:$DBI::errstr\n",1);
+	exit 0;
+}
+
+sub ret {
+	# helper function to print to stderr and exit with specified code
+	my ($msg , $ret_code) = @_;
+	print STDERR "error: $msg" if $msg ne "";
+	exit $ret_code;
+}

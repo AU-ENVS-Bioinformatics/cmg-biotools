@@ -1,0 +1,33 @@
+#!/bin/bash
+# Authors: Peter Fisher Hallin, Tammi Camilla Vesth (tammi@cbs.dtu.dk)
+# For license see /usr/biotools/CMG-biotools.license
+#
+# 	Script for creating an amino acid usage plot from a proteins.fsa file
+#	Requirements : BioPerl, PostScript::Simple.pm
+#
+#	Script should be run in same folder as input data is found
+#
+
+#===== Test if arguments are correct =====
+
+if [ $# != 1 ]
+then
+	echo "Wrong number of arguments"
+	echo "Usage:	aminoacidUsagePlot <file>.proteins.fsa "
+	exit
+fi
+
+if [ ! -f $1.proteins.fsa ]; then
+	echo "File:	$1.proteins.fsa not found, make sure file is called *.proteins.fsa!\n"
+	echo "Usage:	aminoacidUsagePlot <file>.proteins.fsa "
+	exit
+fi 
+
+#===== Generating raw data =====
+perl /usr/biotools/indirect/aminoacidUsage.pl $1.proteins.fsa > $1.aaUsage
+
+wait
+echo "#===== Roseplot of Codon Usage finished/attempted"
+
+grep aa $1.aaUsage | /usr/bin/perl /usr/biotools/indirect/roseplot.pl -axistitle "Percentage" -Ycol 3 -Xcol 2 -fcolor blue -steps 1 -T "Amino acid usage" -ST $1 -output $1.aa-usage.ps
+echo "#===== Roseplot of Amino acid usage finished/attempted"

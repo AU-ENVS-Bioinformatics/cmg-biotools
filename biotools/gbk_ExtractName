@@ -1,0 +1,9 @@
+#!/bin/bash
+# Authors: Karin Lagesen
+# For license see /usr/biotools/CMG-biotools.license
+
+infile=$1
+oname=`grep ORGANISM ${infile} | head -1`
+pid=`echo ${infile} | sed -e 's/.gbk//g'`
+okname=`echo ${oname} "ID" ${pid}| cut -d' ' -f2- | sed -e 's/\//_/g' | sed -e 's/ /_/g' | sed -e 's/\.//g'`
+cp ${infile} ${okname}.gbk

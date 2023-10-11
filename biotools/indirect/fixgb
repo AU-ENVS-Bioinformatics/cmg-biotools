@@ -1,0 +1,57 @@
+#!/usr/bin/perl -w
+# Authors: Peter Fisher Hallin
+# For license see /usr/biotools/CMG-biotools.license
+use strict;
+
+my $translation_flag = 0;
+my $translation_str;
+while(defined( my $line = <>))
+{
+   if($line =~ m/^ACCESSION\s+(\S+)(\s+\S+)+/)
+   {
+     $line = "ACCESSION   " . $1 . " [...]\n";
+     print $line;
+     next;
+   }
+   if($translation_flag == 1 or $line =~ m/\/translation=/)
+   {
+     if($translation_flag == 0)
+     {
+       $translation_str = "                     /translation=\"";
+       if($line =~ m/([A-Z]+)/)
+       {
+ 	 $translation_str .= $1;
+       }
+       $translation_flag = 1;
+       next;
+     }
+     else
+     {
+       if($line =~ m/^                     ([A-Z]+)/)
+       {
+ 	 $translation_str .= $1;
+	 next;
+       }
+       elsif($line =~ m/^                     "$/)
+       {
+         next;
+       }
+       else
+       {
+         $translation_str .= "\"";
+ 	 print substr($translation_str,0,79) . "\n";
+ 	 my $len = length($translation_str);
+ 	 for (my $i=79; $i<=$len; $i+=58)
+ 	 {
+ 	   print "                     " . substr($translation_str,$i,58) . "\n";
+ 	 }
+	 $translation_flag = 0;
+       }
+     }
+   }
+   if($line =~ m/     variation       (\d+)\D+(\d+)/)
+   {
+     $line = "     variation       $1..$2\n";
+   }
+   print $line;
+}
